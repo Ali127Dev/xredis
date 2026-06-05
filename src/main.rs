@@ -1,4 +1,4 @@
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 #[tokio::main]
@@ -21,6 +21,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+enum Command {
+    Ping,
+}
+
+fn parse(input: &str) -> Option<Command> {
+    match input.trim() {
+        "PING" => Some(Command::Ping),
+        _ => None,
+    }
+}
+
+fn execute(cmd: Command) -> Option<&'static str> {
+    match cmd {
+        Command::Ping => Some("PONG"),
+    }
+}
+
 async fn handle_connection(mut socket: TcpStream) {
     let mut buffer = [0; 1024];
 
@@ -32,12 +49,23 @@ async fn handle_connection(mut socket: TcpStream) {
             }
             Ok(n) => {
                 let message = String::from_utf8_lossy(&buffer[..n]);
-                println!("Received: {}", message);
+                if let Some(cmd) = parse(&message) {
+                    if let Some(resp) = execute(cmd) {
+                        socket.write_all(resp.as_bytes()).await.unwrap();
+                    }
+                }
             }
             Err(e) => {
                 println!("Error: {}", e);
                 break;
             }
         }
+    }
+}
+
+fn execute_command(command: &str) -> Option<&'static str> {
+    match command.trim() {
+        "PING" => Some("PONG"),
+        _ => None,
     }
 }
