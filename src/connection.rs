@@ -5,34 +5,45 @@ use tokio::sync::{mpsc, oneshot};
 use crate::protocol::parse;
 use crate::worker::Request;
 
-pub async fn handle_connection(mut socket: TcpStream, tx: mpsc::Sender<Request>) {
-    let mut buffer = [0; 1024];
+pub async fn handle_connection(
+    mut socket: TcpStream,
+    tx: mpsc::Sender<Request>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut buffer = Vec::new();
+    let mut temp = [0; 1024];
 
     loop {
-        match socket.read(&mut buffer).await {
-            Ok(0) => break,
-            Ok(n) => {
-                let message = String::from_utf8_lossy(&buffer[..n]);
+        let n = socket.read(&mut temp).await?;
+        if n == 0 {
+            break Ok(());
+        }
 
-                if let Some(cmd) = parse(&message) {
-                    let (resp_tx, resp_rx) = oneshot::channel();
+        buffer.extend_from_slice(&temp[..n]);
 
-                    let req = Request {
-                        cmd,
-                        respond_to: resp_tx,
-                    };
+        while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
+            let line = buffer.drain(..=pos).collect::<Vec<_>>();
 
-                    if tx.send(req).await.is_err() {
-                        break;
-                    }
+            let line = &line[..line.len() - 1];
 
-                    if let Ok(Some(resp)) = resp_rx.await {
-                        let _ = socket.write_all(resp.as_bytes()).await;
-                    }
+            let message = String::from_utf8_lossy(line);
+
+            if let Some(cmd) = parse(&message) {
+                let (resp_tx, resp_rx) = oneshot::channel();
+
+                let req = Request {
+                    cmd,
+
+                    respond_to: resp_tx,
+                };
+
+                tx.send(req).await?;
+
+                if let Ok(Some(resp)) = resp_rx.await {
+                    socket.write_all(resp.as_bytes()).await?;
+
+                    socket.write_all(b"\n").await?;
                 }
             }
-
-            Err(_) => break,
         }
     }
 }
