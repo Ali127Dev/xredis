@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -7,13 +9,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Listening on 6379");
 
+    let store = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+
     loop {
+        let store = store.clone();
+
         let (socket, addr) = listener.accept().await?;
 
         println!("New connection: {}", addr);
 
         tokio::spawn(async move {
-            handle_connection(socket).await;
+            handle_connection(socket, store).await;
         });
     }
 
@@ -23,22 +29,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 enum Command {
     Ping,
+    Set { key: String, value: String },
+    Get { key: String },
 }
 
 fn parse(input: &str) -> Option<Command> {
-    match input.trim() {
-        "PING" => Some(Command::Ping),
+    let parts: Vec<&str> = input.trim().split_whitespace().collect();
+
+    match parts.as_slice() {
+        ["PING"] => Some(Command::Ping),
+        ["SET", key, value] => Some(Command::Set {
+            key: key.to_string(),
+            value: value.to_string(),
+        }),
+        ["GET", key] => Some(Command::Get {
+            key: key.to_string(),
+        }),
         _ => None,
     }
 }
 
-fn execute(cmd: Command) -> Option<&'static str> {
+fn execute(cmd: Command, store: &Arc<Mutex<HashMap<String, String>>>) -> Option<String> {
     match cmd {
-        Command::Ping => Some("PONG"),
+        Command::Ping => Some("PONG".to_string()),
+        Command::Set { key, value } => {
+            let mut db = store.lock().unwrap();
+            db.insert(key, value);
+            Some("OK".to_string())
+        }
+        Command::Get { key } => {
+            let db = store.lock().unwrap();
+            db.get(&key).cloned()
+        }
     }
 }
 
-async fn handle_connection(mut socket: TcpStream) {
+async fn handle_connection(mut socket: TcpStream, store: Arc<Mutex<HashMap<String, String>>>) {
     let mut buffer = [0; 1024];
 
     loop {
@@ -50,7 +76,7 @@ async fn handle_connection(mut socket: TcpStream) {
             Ok(n) => {
                 let message = String::from_utf8_lossy(&buffer[..n]);
                 if let Some(cmd) = parse(&message) {
-                    if let Some(resp) = execute(cmd) {
+                    if let Some(resp) = execute(cmd,&store) {
                         socket.write_all(resp.as_bytes()).await.unwrap();
                     }
                 }
@@ -60,12 +86,5 @@ async fn handle_connection(mut socket: TcpStream) {
                 break;
             }
         }
-    }
-}
-
-fn execute_command(command: &str) -> Option<&'static str> {
-    match command.trim() {
-        "PING" => Some("PONG"),
-        _ => None,
     }
 }
