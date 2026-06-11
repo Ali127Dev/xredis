@@ -1,90 +1,135 @@
-# 🚀 Redis-Inspired Server in Rust
+# xredis
 
-A small project built to explore Rust from a backend engineering
-perspective.
+**A Redis-compatible TCP key-value server built in Rust.**
 
-The focus is not on cloning Redis feature-for-feature, but on
-understanding the building blocks behind modern network services:
+Engineered from the ground up to explore the internals of networked storage systems — with a focus on correctness, zero-lock concurrency, and idiomatic async Rust.
 
--   ⚡ Async I/O with Tokio
--   🌐 TCP networking
--   📬 Message passing
--   🎭 Actor-style architecture
--   🔒 Ownership-driven concurrency
--   🧠 Stream processing and framing
+-----
 
-------------------------------------------------------------------------
+## Architecture
 
-## ✨ Architecture
-
-``` text
-Client
-   │
-   ▼
-Connection Task
-   │
-   ▼
-Message Queue
-   │
-   ▼
-Worker
-   │
-   ▼
-In-Memory State
+```
+Client (TCP)
+     │
+     ▼
+┌─────────────────┐
+│ Connection Task │  — one per client, handles framing & parsing
+└────────┬────────┘
+         │ mpsc channel
+         ▼
+┌─────────────────┐
+│   Worker Actor  │  — single-threaded, owns all state
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ In-Memory Store │  — HashMap<String, Bytes>
+└─────────────────┘
 ```
 
-The project avoids shared mutable state and instead relies on message
-passing between independent tasks.
+The design avoids shared mutable state entirely. Each connection task communicates with a single worker actor via message-passing channels — no `Mutex`, no `RwLock`, no data races by construction.
 
-------------------------------------------------------------------------
+-----
 
-## 🦀 Why Rust?
+## Features
 
-This project is mainly a playground for learning:
+|Command|Status     |Description                 |
+|-------|-----------|----------------------------|
+|`SET`  |✅ Supported|Store a key-value pair      |
+|`GET`  |✅ Supported|Retrieve a value by key     |
+|`DEL`  |✅ Supported  |Delete one or more keys     |
+|`TTL`  |✅ Supported  |Key expiry with time-to-live|
 
--   Ownership & Borrowing
--   Lifetimes
--   Async/Await
--   Channels
--   Error Handling
--   Concurrency without data races
+-----
 
-------------------------------------------------------------------------
+## Design Decisions
 
-## 🏗️ Design Principles
+### Actor-model concurrency
 
--   Single responsibility per module
--   Clear ownership boundaries
--   Explicit communication paths
--   Simple and readable code
--   Learning-oriented implementation
+Rather than sharing state across threads with locks, a single worker task owns the in-memory store and receives commands via `tokio::sync::mpsc`. This eliminates an entire class of concurrency bugs at the architecture level.
 
-------------------------------------------------------------------------
+### Zero shared mutable state
 
-## 🔍 Topics Explored
+Connection tasks are fully independent. They parse incoming bytes, construct command messages, and send them to the worker — then await a response over a oneshot channel. No data is shared between tasks.
 
--   TCP streams
--   Request/response workflows
--   Buffered stream parsing
--   Backpressure concepts
--   Actor model patterns
--   Event-driven systems
+### Buffered stream parsing
 
-------------------------------------------------------------------------
+Incoming TCP streams are read through `BufReader` with explicit frame boundaries, making the parser resilient to partial reads and backpressure.
 
-## ▶️ Running
+### Explicit error handling
 
-``` bash
+Errors propagate via `Result` at every layer. No panics in the hot path. Connection-level errors are isolated and logged without affecting other clients.
+
+-----
+
+## Getting Started
+
+### Prerequisites
+
+- Rust `1.75+`
+- Cargo
+
+### Run the server
+
+```bash
+git clone https://github.com/Ali127Dev/xredis.git
+cd xredis
 cargo run
 ```
 
-------------------------------------------------------------------------
+Server starts on `127.0.0.1:6379` by default.
 
-## 🎯 Goal
+### Connect with redis-cli
 
-Build a deeper understanding of how networked services work internally
-while becoming more fluent in Rust's programming model.
+```bash
+redis-cli -p 6379
 
-------------------------------------------------------------------------
+127.0.0.1:6379> SET name ali
+OK
 
-Made with ☕, curiosity, and a lot of compiler errors.
+127.0.0.1:6379> GET name
+"ali"
+```
+
+-----
+
+## Roadmap
+
+- [x] TCP listener with async connection handling
+- [x] Actor-model worker with message-passing
+- [x] `SET` command
+- [x] `GET` command
+- [x] `DEL` command
+- [x] `TTL` / `EXPIRE` with background expiry sweep
+- [ ] Benchmarks (`wrk` / custom harness)
+- [ ] Persistence layer (append-only log)
+- [ ] RESP2 protocol full compliance
+
+-----
+
+## Tech Stack
+
+|Crate                 |Purpose                     |
+|----------------------|----------------------------|
+|`tokio`               |Async runtime, TCP, channels|
+|`tokio::sync::mpsc`   |Actor message queue         |
+|`tokio::sync::oneshot`|Per-request response channel|
+|`bytes`               |Zero-copy byte buffer       |
+
+-----
+
+## Why Rust?
+
+This project targets the internals that most backend engineers never touch:
+
+- How a TCP server handles thousands of concurrent connections without threads-per-connection
+- How actor-model architectures eliminate lock contention at the design level
+- How Rust’s ownership system enforces correct concurrency at compile time — not at runtime
+
+Built by a backend engineer who works in Go professionally and is learning Rust by building real systems, not tutorials.
+
+-----
+
+## License
+
+MIT
